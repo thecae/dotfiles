@@ -2,9 +2,18 @@ local wezterm = require("wezterm")
 
 local M = {}
 
-local function get_projects()
+local function get_projects(pane)
+	local domain = pane:get_domain_name()
+	local cmd
+	if domain == "local" then
+		cmd = { "zoxide", "query", "-l" }
+	else
+		local host = domain:gsub("^SSHMUX:", "")
+		cmd = { "ssh", host, "zoxide", "query", "-l" }
+	end
+
 	local choices = {}
-	local success, stdout, stderr = wezterm.run_child_process({ "zoxide", "query", "-l" })
+	local success, stdout, stderr = wezterm.run_child_process(cmd)
 
 	if success then
 		for line in stdout:gmatch("[^\r\n]+") do
@@ -27,20 +36,24 @@ end
 
 M.project_select = function()
 	return wezterm.action_callback(function(window, pane)
+		local domain = pane:get_domain_name()
 		window:perform_action(
 			wezterm.action.InputSelector({
 				title = "Choose Project",
-				choices = get_projects(), -- Runs at keypress time (because of action_callback)
+				choices = get_projects(pane), -- Runs at keypress time (because of action_callback)
 				fuzzy = true,
 				action = wezterm.action_callback(function(inner_window, inner_pane, id, label)
 					if id then
-						inner_window:perform_action(
-							wezterm.action.SwitchToWorkspace({
-								name = label,
-								spawn = { cwd = id },
-							}),
-							inner_pane
-						)
+						local spawn = {
+							cwd = id,
+							domain = domain == "local" and "DefaultDomain" or { DomainName = domain },
+						}
+						if domain ~= "local" then
+							-- wezterm-mux-server on the remote host can inherit the local
+							-- client's $HOME; strip it so the remote shell recomputes its own.
+							spawn.args = { "/usr/bin/env", "-u", "HOME", "fish", "-l" }
+						end
+						inner_window:perform_action(wezterm.action.SwitchToWorkspace({ name = label, spawn = spawn }), inner_pane)
 					end
 				end),
 			}),
